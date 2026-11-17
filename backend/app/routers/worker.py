@@ -1,4 +1,4 @@
-"""采集节点接口：维护工作节点，覆盖提交注册、标记在线、标记离线等动作。"""
+"""采集节点接口：维护工作节点，并提供调度侧读取的容量与释放消费接口。"""
 from __future__ import annotations
 
 from typing import Any
@@ -30,6 +30,37 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出采集节点清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "worker", "total": total, "items": items}
+
+
+@router.get("/schedulable", response_model=dict)
+def schedulable_nodes() -> dict:
+    """可调度节点结果：在线、心跳新鲜、剩余槽位大于 0。"""
+    nodes = service.schedulable_nodes()
+    return {
+        "items": nodes,
+        "total": len(nodes),
+        "可调度节点数": sum(1 for node in nodes if node["可调度"]),
+        "剩余槽位合计": sum(node["剩余槽位"] for node in nodes if node["可调度"]),
+    }
+
+
+@router.post("/capacity/consume", response_model=dict)
+def consume_capacity() -> dict:
+    """读取容量释放结果并回写剩余槽位；重复调用不会重复归还。"""
+    return service.consume_capacity_releases()
+
+
+@router.get("/manifest", response_model=dict)
+def manifest() -> dict:
+    """调度侧清单：已消费结果版本、消费条数与当前节点容量。"""
+    return service.manifest()
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条工作节点明细；不存在时给出可读的错误说明。"""
@@ -51,15 +82,8 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     """对单条工作节点执行提交注册、标记在线、标记离线；不允许的动作会被拦下并说明原因。"""
-    action = str(payload.values.get("action") or "").strip()
+    action = payload.action_name()
     entry, message = service.run_action(entry_id, action)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出采集节点清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "worker", "total": total, "items": items}

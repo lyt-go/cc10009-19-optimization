@@ -1,4 +1,4 @@
-"""请求分配接口：维护分配策略，覆盖提交策略验证、启用策略、停用策略等动作。"""
+"""请求分配接口：维护分配策略，并提供派发解释与调度侧同步接口。"""
 from __future__ import annotations
 
 from typing import Any
@@ -30,6 +30,38 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出请求分配清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "dispatch", "total": total, "items": items}
+
+
+@router.get("/plan", response_model=dict)
+def dispatch_plan() -> dict:
+    """下一次派发解释：排队公平性、等待时长与节点新鲜度的综合判断。"""
+    return service.plan()
+
+
+@router.post("/sync", response_model=dict)
+def sync_results() -> dict:
+    """调度侧同步：消费容量释放与新的渲染结果，并写入调度清单与业务记录。"""
+    return service.sync()
+
+
+@router.get("/records", response_model=dict)
+def list_records(limit: int = Query(default=20, ge=1, le=200)) -> dict:
+    """调度侧业务记录：每次同步的清单版本与消费明细。"""
+    items = service.records(limit=limit)
+    return {"total": len(items), "items": items}
+
+
+@router.get("/manifest", response_model=dict)
+def manifest() -> dict:
+    """调度侧清单：已消费结果版本与节点容量。"""
+    return service.manifest()
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条分配策略明细；不存在时给出可读的错误说明。"""
@@ -51,15 +83,8 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     """对单条分配策略执行提交策略验证、启用策略、停用策略；不允许的动作会被拦下并说明原因。"""
-    action = str(payload.values.get("action") or "").strip()
+    action = payload.action_name()
     entry, message = service.run_action(entry_id, action)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出请求分配清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "dispatch", "total": total, "items": items}
